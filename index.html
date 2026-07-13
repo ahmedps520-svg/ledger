@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>The Ledger — Subscription Tracker</title>
+<meta name="theme-color" content="#12151C">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- ===================== LOGIN SCREEN ===================== -->
+<div id="screenLogin" class="screen">
+  <div class="login-wrap">
+    <form class="login-card" id="loginForm" autocomplete="off">
+      <div class="login-seal">S</div>
+      <h1>The Ledger</h1>
+      <p class="sub">Private access only. Sign in to view the book.</p>
+      <div class="field">
+        <label for="loginEmail">Email</label>
+        <input type="email" id="loginEmail" placeholder="you@example.com" required>
+      </div>
+      <div class="field">
+        <label for="loginPassword">Password</label>
+        <input type="password" id="loginPassword" placeholder="••••••••" required>
+      </div>
+      <button type="submit" class="btn btn-primary">Sign in</button>
+      <div class="error-msg" id="loginError"></div>
+    </form>
+  </div>
+</div>
+
+<!-- ===================== APP SCREEN ===================== -->
+<div id="screenApp" class="screen hidden">
+  <header class="app-header">
+    <div class="brand">
+      <div class="seal">S</div>
+      <h1>The Ledger</h1>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="btnBackup" title="Backup / Restore">⇅</button>
+      <button class="icon-btn" id="btnLogout" title="Log out">⎋</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="summary-grid" id="summaryGrid"></div>
+
+    <div class="toolbar">
+      <input type="text" class="search-input" id="searchInput" placeholder="Search friends…">
+      <select class="filter-select" id="filterSelect">
+        <option value="all">All subs</option>
+        <option value="paid">Paid this month</option>
+        <option value="unpaid">Unpaid this month</option>
+        <option value="Spotify">Spotify only</option>
+        <option value="Snapchat">Snapchat only</option>
+        <option value="Custom">Custom only</option>
+      </select>
+    </div>
+
+    <div class="friend-list" id="friendList"></div>
+  </main>
+
+  <button class="fab" id="fabAdd" title="Add friend">+</button>
+</div>
+
+<div id="modalRoot"></div>
+<div id="toastRoot"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
