@@ -164,10 +164,11 @@ select.filter-select{
   display:flex; align-items:center; justify-content:space-between; gap:12px;
   padding:12px 0; border-top:1px solid var(--line);
 }
-.sub-left{ display:flex; align-items:center; gap:12px; min-width:0; }
+.sub-left{ display:flex; align-items:center; gap:12px; min-width:0; flex:1 1 auto; }
 .service-chip{
   padding:4px 10px; border-radius:20px; font-size:11.5px; font-weight:600;
   white-space:nowrap; letter-spacing:.02em;
+  max-width:140px; overflow:hidden; text-overflow:ellipsis; flex-shrink:1;
 }
 .chip-spotify{ background:#1DB95422; color:#3fdc7c; border:1px solid #1DB95455; }
 .chip-snapchat{ background:#FFFC0022; color:#e8e34e; border:1px solid #FFFC0055; }
@@ -228,7 +229,7 @@ select.filter-select{
   padding:8px 14px; border-radius:20px; border:1px solid var(--line); background:var(--surface-2);
   color:var(--muted); font-size:13px; cursor:pointer;
 }
-.chip-option.active{ border-color:var(--gold); color:var(--gold); background:var(--gold-dim)33; }
+.chip-option.active{ border-color:var(--gold); color:var(--gold); background:rgba(212,169,74,0.14); }
 .modal-actions{ display:flex; gap:10px; margin-top:22px; }
 .modal-actions .btn{ flex:1; }
 
@@ -250,4 +251,64 @@ select.filter-select{
 @media (max-width:640px){
   .summary-grid{ grid-template-columns:repeat(2,1fr); }
   main{ padding:16px 14px 100px; }
+}
+
+/* ---------- Additions: portal, badges, loading ---------- */
+.spinner{
+  width:34px; height:34px; border-radius:50%;
+  border:3px solid var(--line); border-top-color:var(--gold);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin{ to{ transform:rotate(360deg); } }
+
+.login-alt{ margin:18px 0 0; font-size:13px; color:var(--muted); }
+.login-alt a{ color:var(--gold); text-decoration:none; }
+.login-alt a:hover{ text-decoration:underline; }
+
+.field-hint{ margin:6px 0 0; font-size:11.5px; color:var(--muted); line-height:1.45; }
+.group-label{
+  display:block; font-size:12.5px; color:var(--muted); margin-bottom:8px;
+  text-transform:uppercase; letter-spacing:.02em;
+}
+.modal-note{ color:var(--muted); font-size:13.5px; margin:0 0 18px; line-height:1.5; }
+.dim-note{ color:var(--muted); font-size:13px; }
+.per-mo{ color:var(--muted); font-weight:400; font-size:12px; }
+.btn-wide{ width:100%; margin-top:10px; }
+
+.friend-ident{ min-width:0; }
+.access-badge{
+  display:inline-block; vertical-align:middle; margin-left:8px;
+  padding:2px 8px; border-radius:20px;
+  font-family:'Inter',sans-serif; font-size:10.5px; font-weight:600;
+  letter-spacing:.04em; text-transform:uppercase;
+  border:1px solid var(--line); background:var(--surface-2); color:var(--muted);
+}
+.access-badge.is-registered{
+  border-color:rgba(63,190,122,0.45); background:var(--green-dim); color:var(--green);
+}
+
+.section-title{
+  font-size:15px; color:var(--muted); font-weight:600;
+  text-transform:uppercase; letter-spacing:.05em; margin:0 0 12px;
+}
+.summary-grid-3{ grid-template-columns:repeat(3,1fr); }
+.portal-footnote{
+  margin:22px 2px 0; color:var(--muted); font-size:12.5px; line-height:1.5; text-align:center;
+}
+
+@media (max-width:640px){
+  .summary-grid-3{ grid-template-columns:repeat(3,1fr); gap:8px; }
+  .summary-grid-3 .summary-card{ padding:12px 10px; }
+  .summary-grid-3 .summary-card .value{ font-size:17px; }
+}
+
+/* A long custom label plus four actions cannot fit one phone-width line,
+   so the actions drop to their own row rather than overlapping the price. */
+.friend-card > .sub-row:first-child{ border-top:none; }
+
+@media (max-width:560px){
+  .sub-row{ flex-wrap:wrap; row-gap:10px; }
+  .sub-left{ flex:1 1 100%; }
+  .sub-actions{ flex:1 1 100%; justify-content:flex-end; }
+  .service-chip{ max-width:none; }
 }

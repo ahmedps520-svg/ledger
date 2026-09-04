@@ -2,12 +2,17 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { readDB, writeDB } = require('./lib/store');
+const { readDB, writeDB, takeGeneratedAdminPassword, DB_PATH } = require('./lib/store');
 const {
   hashPassword, verifyPassword,
-  verifySession, parseCookies,
+  setSessionSecret, verifySession, parseCookies,
   makeSessionCookie, clearSessionCookie
 } = require('./lib/auth');
+
+// Load the DB up front so the session signing key exists before the first
+// request arrives. The key is persisted, so sessions survive a restart.
+const bootDB = readDB();
+setSessionSecret(process.env.SESSION_SECRET || bootDB.sessionSecret);
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -21,6 +26,9 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
   '.png': 'image/png',
   '.ico': 'image/x-icon',
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.txt': 'text/plain; charset=utf-8',
   '.webmanifest': 'application/manifest+json'
 };
 
@@ -78,15 +86,21 @@ function serveStatic(req, res, urlPath) {
   if (filePath === '/portal' || filePath === '/portal/') filePath = '/portal/login.html';
 
   const resolved = path.normalize(path.join(PUBLIC_DIR, filePath));
-  if (!resolved.startsWith(PUBLIC_DIR)) { res.writeHead(403); return res.end('Forbidden'); }
+  // startsWith(PUBLIC_DIR) alone would also accept a sibling like "/public-evil"
+  if (resolved !== PUBLIC_DIR && !resolved.startsWith(PUBLIC_DIR + path.sep)) {
+    res.writeHead(403); return res.end('Forbidden');
+  }
 
   fs.readFile(resolved, (err, data) => {
     if (err) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      return res.end('Not found');
+      res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end('<h1>404</h1><p>Not found. <a href="/admin/">Admin dashboard</a> · <a href="/portal/">Friend portal</a></p>');
     }
     const ext = path.extname(resolved);
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'application/octet-stream' });
+    res.writeHead(200, {
+      'Content-Type': MIME[ext] || 'application/octet-stream',
+      'Cache-Control': 'no-cache'
+    });
     res.end(data);
   });
 }
@@ -99,7 +113,8 @@ async function handleApi(req, res, pathname) {
   if (pathname === '/api/admin/login' && method === 'POST') {
     const { email, password } = await readBody(req);
     const db = readDB();
-    if (email && password && email.trim().toLowerCase() === db.admin.email.toLowerCase() &&
+    if (typeof email === 'string' && typeof password === 'string' &&
+        email.trim().toLowerCase() === db.admin.email.toLowerCase() &&
         verifyPassword(password, db.admin.passwordHash)) {
       const cookie = makeSessionCookie(ADMIN_COOKIE, { role: 'admin', email: db.admin.email });
       return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': cookie });
@@ -152,14 +167,15 @@ async function handleApi(req, res, pathname) {
         return sendJSON(res, 200, { ok: true });
       }
       const { name, note, email } = await readBody(req);
-      if (email !== undefined && email.trim() &&
-          db.friends.some(f => f.id !== friend.id && f.email && f.email.toLowerCase() === email.trim().toLowerCase())) {
+      const emailStr = email === undefined ? undefined : String(email || '').trim();
+      if (emailStr &&
+          db.friends.some(f => f.id !== friend.id && f.email && f.email.toLowerCase() === emailStr.toLowerCase())) {
         return sendJSON(res, 400, { ok: false, error: 'That email is already linked to another friend.' });
       }
-      if (name !== undefined) friend.name = name.trim() || friend.name;
-      if (note !== undefined) friend.note = note.trim();
-      if (email !== undefined) {
-        const newEmail = email.trim().toLowerCase();
+      if (name !== undefined) friend.name = String(name || '').trim() || friend.name;
+      if (note !== undefined) friend.note = String(note || '').trim();
+      if (emailStr !== undefined) {
+        const newEmail = emailStr.toLowerCase();
         if (newEmail !== friend.email) friend.passwordHash = null; // email changed -> re-registration required
         friend.email = newEmail;
       }
@@ -301,7 +317,20 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`The Ledger server running at http://localhost:${PORT}`);
-  console.log(`Admin dashboard:  http://localhost:${PORT}/admin/index.html`);
-  console.log(`Friend portal:    http://localhost:${PORT}/portal/login.html`);
+  console.log(`\nThe Ledger is running at http://localhost:${PORT}`);
+  console.log(`  Admin dashboard:  http://localhost:${PORT}/admin/`);
+  console.log(`  Friend portal:    http://localhost:${PORT}/portal/`);
+  console.log(`  Data file:        ${DB_PATH}`);
+
+  const generated = takeGeneratedAdminPassword();
+  if (generated) {
+    console.log(`\n  ${'='.repeat(52)}`);
+    console.log('  FIRST RUN — your admin account has been created:');
+    console.log(`    email:    ${bootDB.admin.email}`);
+    console.log(`    password: ${generated}`);
+    console.log('  This is shown once. Save it now.');
+    console.log('  (Set ADMIN_EMAIL / ADMIN_PASSWORD before the first run,');
+    console.log('   or run `npm run set-password` to change it later.)');
+    console.log(`  ${'='.repeat(52)}\n`);
+  }
 });

@@ -1,0 +1,9 @@
+node_modules/
+
+# The live ledger: real subscription data and password hashes.
+data/
+*.corrupt-*
+
+.DS_Store
+*.log
+.env

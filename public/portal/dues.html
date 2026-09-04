@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>The Ledger — Your dues</title>
+<meta name="theme-color" content="#12151C">
+<link rel="manifest" href="/portal/manifest.json">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="/shared/styles.css">
+</head>
+<body>
+<div class="screen" id="duesScreen">
+  <header class="app-header">
+    <div class="brand">
+      <div class="seal">S</div>
+      <h1 id="duesName">The Ledger</h1>
+    </div>
+    <div class="header-actions">
+      <button class="icon-btn" id="btnLogout" title="Log out">⎋</button>
+    </div>
+  </header>
+  <main>
+    <div class="summary-grid summary-grid-3" id="duesSummary"></div>
+    <h2 class="section-title" id="duesMonth"></h2>
+    <div class="friend-list" id="duesList"></div>
+    <p class="portal-footnote">Marked paid by hand once the money lands. If something looks wrong, just ask.</p>
+  </main>
+</div>
+<div id="toastRoot"></div>
+<script src="/portal/portal.js"></script>
+</body>
+</html>

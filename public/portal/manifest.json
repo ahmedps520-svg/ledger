@@ -1,0 +1,16 @@
+{
+  "name": "The Ledger — Your Dues",
+  "short_name": "My Dues",
+  "description": "Check which of your subscriptions are paid up and what's still owed.",
+  "start_url": "/portal/",
+  "scope": "/portal/",
+  "display": "standalone",
+  "background_color": "#12151C",
+  "theme_color": "#12151C",
+  "orientation": "portrait-primary",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
