@@ -1,7 +1,7 @@
 {
   "name": "the-ledger",
-  "version": "1.0.0",
-  "description": "Subscription ledger for friends — admin dashboard + friend self-serve portal, synced across devices.",
+  "version": "2.0.0",
+  "description": "Subscription ledger for friends — admin dashboard plus a private dues link for each friend.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -14,5 +14,7 @@
   },
   "license": "MIT",
   "private": true,
-  "dependencies": {}
+  "dependencies": {
+    "pg": "^8.13.0"
+  }
 }

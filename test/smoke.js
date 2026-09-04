@@ -7,9 +7,10 @@ const os = require('os');
 const path = require('path');
 const assert = require('assert');
 
-const PORT = 3999;
+const PORT = Number(process.env.TEST_PORT || 3999);
 const BASE = `http://127.0.0.1:${PORT}`;
 const DB = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ledger-test-')), 'db.json');
+const BACKEND = process.env.DATABASE_URL ? 'postgres' : 'file';
 
 let passed = 0;
 function check(label, cond) {
@@ -60,12 +61,13 @@ async function waitForServer() {
 
 (async () => {
   await waitForServer();
-  console.log('\nstatic files');
+  console.log(`\nstatic files  [${BACKEND} backend]`);
   check('/ serves the admin dashboard', (await req('admin', 'GET', '/')).text.includes('The Ledger'));
-  check('/portal/ serves the portal login', (await req('admin', 'GET', '/portal/')).text.includes('Sign in'));
+  check('/portal/ serves the link help page', (await req('admin', 'GET', '/portal/')).text.includes('personal link'));
   check('stylesheet is served', (await req('admin', 'GET', '/shared/styles.css')).text.includes('--gold'));
   check('admin app.js is served', (await req('admin', 'GET', '/admin/app.js')).status === 200);
   check('portal.js is served', (await req('admin', 'GET', '/portal/portal.js')).status === 200);
+  check('shared util is served', (await req('admin', 'GET', '/shared/util.js')).text.includes('SAR'));
   check('icons exist', (await req('admin', 'GET', '/icons/icon-192.png')).status === 200);
   check('service worker is served', (await req('admin', 'GET', '/service-worker.js')).status === 200);
   check('manifest is served', (await req('admin', 'GET', '/manifest.json')).status === 200);
@@ -103,39 +105,56 @@ async function waitForServer() {
   check('subscription edited', edited.json.friend.subscriptions[0].customLabel === 'YouTube');
   check('unknown friend gives 404', (await req('admin', 'PUT', '/api/admin/friends/deadbeef', { name: 'X' })).status === 404);
 
-  console.log('\nfriend portal');
-  check('dues need a session', (await req('friend', 'GET', '/api/portal/dues')).status === 401);
-  check('unknown email cannot register', (await req('friend', 'POST', '/api/portal/register', { email: 'ghost@example.com', password: 'letmein1' })).status === 404);
-  check('short password rejected', (await req('friend', 'POST', '/api/portal/register', { email: 'sarah@example.com', password: 'abc' })).status === 400);
-  check('registration succeeds', (await req('friend', 'POST', '/api/portal/register', { email: 'sarah@example.com', password: 'letmein1' })).status === 200);
-  check('double registration rejected', (await req('friend', 'POST', '/api/portal/register', { email: 'sarah@example.com', password: 'letmein1' })).status === 400);
+  console.log('\nprivate friend links');
+  const token = created.json.friend.token;
+  check('friend gets a link token', /^[a-f0-9]{32}$/.test(token));
+  check('tokens are unique per friend', (await req('admin','POST','/api/admin/friends',{name:'Marcus'})).json.friend.token !== token);
 
-  const dues = await req('friend', 'GET', '/api/portal/dues');
-  check('friend sees their own dues', dues.status === 200 && dues.json.friend.name === 'Sarah');
-  check('friend sees their subscription', dues.json.friend.subscriptions[0].customLabel === 'YouTube');
-  check('friend cannot reach admin routes', (await req('friend', 'GET', '/api/admin/friends')).status === 401);
+  const dues = await req('friend', 'GET', `/api/portal/dues/${token}`);
+  check('link opens that friend\'s dues', dues.status === 200 && dues.json.friend.name === 'Sarah');
+  check('dues show the subscription', dues.json.friend.subscriptions[0].customLabel === 'YouTube');
+  check('own token is not echoed back', dues.json.friend.token === undefined);
+  check('no other friend is exposed', dues.json.friends === undefined);
 
-  await req('friend', 'POST', '/api/portal/logout');
-  check('logout clears the session', (await req('friend', 'GET', '/api/portal/dues')).status === 401);
-  check('wrong portal password rejected', (await req('friend', 'POST', '/api/portal/login', { email: 'sarah@example.com', password: 'wrong' })).status === 401);
-  check('portal login works', (await req('friend', 'POST', '/api/portal/login', { email: 'sarah@example.com', password: 'letmein1' })).status === 200);
+  check('a wrong token is refused', (await req('friend','GET','/api/portal/dues/'+'0'.repeat(32))).status === 404);
+  check('a short token is refused', (await req('friend','GET','/api/portal/dues/abc')).status === 404);
+  check('link grants no admin access', (await req('friend','GET','/api/admin/friends')).status === 401);
+  check('link cannot toggle payments', (await req('friend','POST',`/api/admin/friends/${fid}/subscriptions/${sid}/toggle`)).status === 401);
+
+  check('/f/<token> serves the dues page', (await req('friend','GET',`/f/${token}`)).text.includes('duesSummary'));
+  check('/portal/ explains how links work', (await req('friend','GET','/portal/')).text.includes('personal link'));
+
+  const relinked = await req('admin', 'POST', `/api/admin/friends/${fid}/relink`);
+  const newToken = relinked.json.friend.token;
+  check('relink issues a different token', relinked.status === 200 && newToken !== token);
+  check('the old link stops working', (await req('friend','GET',`/api/portal/dues/${token}`)).status === 404);
+  check('the new link works', (await req('friend','GET',`/api/portal/dues/${newToken}`)).status === 200);
+
+  check('changing the email keeps the link', (await req('admin','PUT',`/api/admin/friends/${fid}`,{email:'new@example.com'})).json.friend.token === newToken);
 
   console.log('\nbackup & persistence');
   const exported = await req('admin', 'GET', '/api/admin/export');
-  check('export returns the ledger', exported.json.friends.length === 1);
+  check('export returns the ledger', exported.json.friends.length === 2);
   check('bad import rejected', (await req('admin', 'POST', '/api/admin/import', { friends: 'nope' })).status === 400);
+  check('export carries the links', typeof exported.json.friends[0].token === 'string');
   check('import restores data', (await req('admin', 'POST', '/api/admin/import', { friends: exported.json.friends })).status === 200);
-  check('friend keeps portal access through an import', (await req('friend', 'GET', '/api/portal/dues')).status === 200);
+  check('links survive an import', (await req('friend','GET',`/api/portal/dues/${newToken}`)).status === 200);
+  check('a v1 backup without tokens still imports', (await req('admin','POST','/api/admin/import',{friends:[{id:'aa11bb22',name:'Old Friend',subscriptions:[]}]})).status === 200);
+  check('imported v1 friend is given a link', /^[a-f0-9]{32}$/.test((await req('admin','GET','/api/admin/friends')).json.friends.find(f=>f.name==='Old Friend').token));
 
-  const onDisk = JSON.parse(fs.readFileSync(DB, 'utf8'));
-  check('data persisted to disk', onDisk.friends[0].name === 'Sarah');
-  check('friend password stored hashed', /^scrypt\$/.test(onDisk.friends[0].passwordHash));
-  check('admin password stored hashed', /^scrypt\$/.test(onDisk.admin.passwordHash) && !JSON.stringify(onDisk).includes('secret123'));
+  if (BACKEND === 'file') {
+    const live = (await req('admin', 'GET', '/api/admin/friends')).json.friends.map(f => f.name).join(',');
+    const onDisk = JSON.parse(fs.readFileSync(DB, 'utf8'));
+    // the response must not land before the ledger is actually saved
+    check('disk matches what the API reports', onDisk.friends.map(f => f.name).join(',') === live);
+    check('admin password stored hashed', /^scrypt\$/.test(onDisk.admin.passwordHash) && !JSON.stringify(onDisk).includes('secret123'));
+    check('friend passwords are gone entirely', onDisk.friends[0].passwordHash === undefined);
+  }
 
   await req('admin', 'POST', '/api/admin/logout');
   check('admin logout works', (await req('admin', 'GET', '/api/admin/friends')).status === 401);
 
-  console.log(`\n${passed} checks passed\n`);
+  console.log(`\n${passed} checks passed (${BACKEND} backend)\n`);
 })()
   .catch((err) => { console.error(`\n${err.message}\n`); process.exitCode = 1; })
   .finally(() => { server.kill(); fs.rmSync(path.dirname(DB), { recursive: true, force: true }); });

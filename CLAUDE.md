@@ -14,8 +14,14 @@ throwaway database and takes a couple of seconds.
 
 ## Things to know
 
-- `data/` holds the live ledger, including password hashes. It is
-  git-ignored and must stay that way. Never commit it.
+- Storage is Postgres when `DATABASE_URL` is set (production, on Render)
+  and a local JSON file otherwise. Both are behind `lib/store.js`.
+- `data/` holds the local ledger, including the admin password hash and
+  friends' private links. It is git-ignored and must stay that way.
+- Friends authenticate by a private link token, not a password. Never log
+  a token or put one in an error message.
 - The admin account is seeded on first run only, from `ADMIN_EMAIL` /
   `ADMIN_PASSWORD`, or with a generated password printed once.
-- No dependencies. Node's standard library only — keep it that way.
+- One dependency, `pg`, used only by the Postgres backend. Don't add more
+  without good reason.
+- Amounts are Saudi Riyals; the currency is set in `public/shared/util.js`.

@@ -9,16 +9,16 @@
       because addAll() rejects atomically — one missing file and
       the whole service worker fails to install.
    ========================================================= */
-const CACHE_NAME = 'ledger-cache-v2';
+const CACHE_NAME = 'ledger-cache-v3';
 const ASSETS = [
   '/admin/',
   '/admin/index.html',
   '/admin/app.js',
-  '/portal/login.html',
-  '/portal/register.html',
   '/portal/dues.html',
+  '/portal/help.html',
   '/portal/portal.js',
   '/shared/styles.css',
+  '/shared/util.js',
   '/manifest.json',
   '/portal/manifest.json',
   '/icons/icon-192.png',

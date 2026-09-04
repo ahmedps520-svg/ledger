@@ -30,48 +30,11 @@ async function api(path, options = {}) {
   return data;
 }
 
-/* ---------------- utils ---------------- */
-function currentMonthKey(d = new Date()) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-function monthLabel(key) {
-  const [y, m] = key.split('-').map(Number);
-  return new Date(y, m - 1, 1).toLocaleString('en-US', { month: 'long', year: 'numeric' });
-}
-function fmtMoney(n) {
-  const num = Number(n) || 0;
-  return '$' + num.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function todayDay() { return new Date().getDate(); }
-
-function escapeHtml(str) {
-  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
-function toast(msg) {
-  const root = document.getElementById('toastRoot');
-  const el = document.createElement('div');
-  el.className = 'toast';
-  el.textContent = msg;
-  root.innerHTML = '';
-  root.appendChild(el);
-  setTimeout(() => el.remove(), 2600);
-}
-
+/* ---------------- lookups ---------------- */
 function findFriend(id) { return state.friends.find(f => f.id === id); }
 function findSub(friendId, subId) {
   const f = findFriend(friendId);
   return f ? f.subscriptions.find(s => s.id === subId) : null;
-}
-
-function isPaidThisMonth(sub) {
-  const mk = currentMonthKey();
-  return !!(sub.payments && sub.payments[mk] && sub.payments[mk].paid);
-}
-function isOverdue(sub) {
-  if (isPaidThisMonth(sub)) return false;
-  if (!sub.dueDay) return false;
-  return todayDay() > Number(sub.dueDay);
 }
 
 /** Replace one friend in state with the server's copy after a write. */
@@ -159,12 +122,6 @@ function renderSummary() {
   `;
 }
 
-function chipClass(service) {
-  if (service === 'Spotify') return 'chip-spotify';
-  if (service === 'Snapchat') return 'chip-snapchat';
-  return 'chip-custom';
-}
-
 function subMatchesFilter(sub) {
   const f = state.filter;
   if (f === 'all') return true;
@@ -207,10 +164,11 @@ function renderFriendList() {
       <div class="friend-card" data-friend="${f.id}">
         <div class="friend-top">
           <div class="friend-ident">
-            <div class="friend-name">${escapeHtml(f.name)}${accessBadge(f)}</div>
+            <div class="friend-name">${escapeHtml(f.name)}</div>
             <div class="friend-meta">${meta}</div>
           </div>
           <div class="friend-top-actions">
+            <button class="btn btn-ghost btn-sm" data-action="copy-link" data-friend="${f.id}" title="Copy this friend's private dues link">Link</button>
             <button class="btn btn-ghost btn-sm" data-action="add-sub" data-friend="${f.id}">+ Sub</button>
             <button class="icon-btn" data-action="edit-friend" data-friend="${f.id}" title="Edit / remove friend">⋯</button>
           </div>
@@ -221,17 +179,19 @@ function renderFriendList() {
   }).join('');
 }
 
-/** Shows whether this friend can sign in to the portal to check their own dues. */
-function accessBadge(f) {
-  if (!f.email) return '';
-  if (f.registered) return `<span class="access-badge is-registered" title="${escapeHtml(f.email)} — signed up for the portal">portal</span>`;
-  return `<span class="access-badge" title="${escapeHtml(f.email)} — invited, hasn't set a password yet">invited</span>`;
+/** Every friend has a private dues link; this is the shortcut to send it. */
+function linkFor(friend) {
+  return `${location.origin}/f/${friend.token}`;
+}
+
+function inviteText(friend) {
+  return `Hey ${friend.name}! You can check what you owe me any time here: ${linkFor(friend)}`;
 }
 
 function renderSubRow(friend, sub) {
   const paid = isPaidThisMonth(sub);
   const overdue = isOverdue(sub);
-  const label = sub.service === 'Custom' ? (sub.customLabel || 'Custom') : sub.service;
+  const label = subLabel(sub);
   const stampText = paid ? 'Paid' : (overdue ? 'Overdue' : 'Due');
   const stampClass = paid ? 'stamp-paid' : 'stamp-unpaid' + (overdue ? ' stamp-overdue' : '');
   return `
@@ -259,12 +219,21 @@ document.getElementById('friendList').addEventListener('click', (e) => {
   if (!btn) return;
   const { action, friend: friendId, sub: subId } = btn.dataset;
 
+  if (action === 'copy-link') copyLink(friendId);
   if (action === 'add-sub') openAddSubModal(friendId);
   if (action === 'edit-friend') openEditFriendModal(friendId);
   if (action === 'toggle-paid') togglePaid(friendId, subId, btn);
   if (action === 'share-sub') openShareModal(friendId, subId);
   if (action === 'edit-sub') openEditSubModal(friendId, subId);
 });
+
+async function copyLink(friendId) {
+  const f = findFriend(friendId);
+  if (!f) return;
+  toast(await copyText(inviteText(f))
+    ? `Link for ${f.name} copied — send it to them`
+    : linkFor(f));
+}
 
 async function togglePaid(friendId, subId, btn) {
   const sub = findSub(friendId, subId);
@@ -378,13 +347,13 @@ function openEditFriendModal(friendId) {
         <input type="text" id="editFriendName" value="${escapeHtml(f.name)}" required>
       </div>
       <div class="field">
-        <label for="editFriendEmail">Email</label>
-        <input type="email" id="editFriendEmail" value="${escapeHtml(f.email || '')}" placeholder="lets them sign in to the portal">
-        <p class="field-hint">${f.email
-          ? (f.registered
-              ? 'Signed up for the portal. Changing this email resets their password.'
-              : 'Invited — send them the portal link so they can set a password.')
-          : 'Add an email to let them check their own dues at /portal/.'}</p>
+        <label for="editFriendEmail">Email (optional)</label>
+        <input type="email" id="editFriendEmail" value="${escapeHtml(f.email || '')}" placeholder="just for your records">
+      </div>
+      <div class="field">
+        <label>Their private dues link</label>
+        <div class="link-box mono" id="linkBox">${escapeHtml(linkFor(f))}</div>
+        <p class="field-hint">Anyone with this link can see ${escapeHtml(f.name)}'s dues — and nothing else. Send them a new one if it ends up somewhere it shouldn't.</p>
       </div>
       <div class="field">
         <label for="editFriendNote">Note</label>
@@ -396,7 +365,10 @@ function openEditFriendModal(friendId) {
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
-    ${f.email ? '<button type="button" class="btn btn-ghost btn-wide" id="copyInviteBtn">Copy portal invite</button>' : ''}
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" id="copyInviteBtn">Copy link</button>
+      <button type="button" class="btn btn-ghost" id="relinkBtn">New link</button>
+    </div>
   `);
 
   document.getElementById('formEditFriend').addEventListener('submit', async (e) => {
@@ -432,15 +404,20 @@ function openEditFriendModal(friendId) {
     }
   });
 
-  const inviteBtn = document.getElementById('copyInviteBtn');
-  if (inviteBtn) inviteBtn.addEventListener('click', async () => {
-    const url = `${location.origin}/portal/register.html`;
-    const text = `Hey ${f.name}! You can check what you owe me any time here: ${url} — sign up with ${f.email}.`;
+  document.getElementById('copyInviteBtn').addEventListener('click', async () => {
+    toast(await copyText(inviteText(f)) ? 'Link copied — send it to them' : linkFor(f));
+  });
+
+  document.getElementById('relinkBtn').addEventListener('click', async () => {
+    if (!confirm(`Give ${f.name} a brand new link?\n\nTheir current link stops working straight away, so you'll need to send them the new one.`)) return;
     try {
-      await navigator.clipboard.writeText(text);
-      toast('Invite copied to clipboard');
-    } catch {
-      toast(url);
+      const { friend } = await api(`/api/admin/friends/${friendId}/relink`, { method: 'POST' });
+      mergeFriend(friend);
+      document.getElementById('linkBox').textContent = linkFor(friend);
+      renderAll();
+      toast('New link created — send it to them');
+    } catch (err) {
+      modalError(err.message);
     }
   });
 }
@@ -586,7 +563,7 @@ function openShareModal(friendId, subId) {
   const f = findFriend(friendId);
   const s = findSub(friendId, subId);
   if (!f || !s) return;
-  const label = s.service === 'Custom' ? (s.customLabel || 'subscription') : s.service;
+  const label = subLabel(s);
   const mk = currentMonthKey();
   const paid = isPaidThisMonth(s);
   const dueText = s.dueDay ? ` (due the ${s.dueDay}${ordinalSuffix(s.dueDay)})` : '';
@@ -625,19 +602,11 @@ function openShareModal(friendId, subId) {
   });
 }
 
-function ordinalSuffix(n) {
-  n = Number(n);
-  if (n % 10 === 1 && n % 100 !== 11) return 'st';
-  if (n % 10 === 2 && n % 100 !== 12) return 'nd';
-  if (n % 10 === 3 && n % 100 !== 13) return 'rd';
-  return 'th';
-}
-
 /* ---- Backup / restore ---- */
 document.getElementById('btnBackup').addEventListener('click', () => {
   openModal(`
     <h2>Backup &amp; restore</h2>
-    <p class="modal-note">Your ledger lives on the server. Export a copy to keep off-site, or restore one you saved earlier.</p>
+    <p class="modal-note">Your ledger lives on the server. Export a copy to keep off-site, or restore one you saved earlier. A backup contains everyone's private links, so keep the file to yourself.</p>
     <div class="error-msg"></div>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" id="exportBtn">Export backup</button>

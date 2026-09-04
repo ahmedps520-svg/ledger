@@ -2,22 +2,18 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { readDB, writeDB, takeGeneratedAdminPassword, DB_PATH } = require('./lib/store');
 const {
-  hashPassword, verifyPassword,
-  setSessionSecret, verifySession, parseCookies,
-  makeSessionCookie, clearSessionCookie
+  initStore, readDB, writeDB, closeStore,
+  takeGeneratedAdminPassword, newToken, STORE_DESCRIPTION
+} = require('./lib/store');
+const {
+  verifyPassword, setSessionSecret, verifySession,
+  parseCookies, makeSessionCookie, clearSessionCookie
 } = require('./lib/auth');
-
-// Load the DB up front so the session signing key exists before the first
-// request arrives. The key is persisted, so sessions survive a restart.
-const bootDB = readDB();
-setSessionSecret(process.env.SESSION_SECRET || bootDB.sessionSecret);
 
 const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const ADMIN_COOKIE = 'ledger_admin_session';
-const FRIEND_COOKIE = 'ledger_friend_session';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -66,16 +62,25 @@ function getAdminSession(req) {
   const payload = verifySession(cookies[ADMIN_COOKIE]);
   return payload && payload.role === 'admin' ? payload : null;
 }
-function getFriendSession(req) {
-  const cookies = parseCookies(req);
-  const payload = verifySession(cookies[FRIEND_COOKIE]);
-  return payload && payload.role === 'friend' ? payload : null;
+/** The admin sees each friend's private link token so it can be shared. */
+function adminFriend(f) {
+  return { ...f };
 }
 
-function publicFriend(f) {
-  // never send the password hash to the client
-  const { passwordHash, ...rest } = f;
-  return { ...rest, registered: !!passwordHash };
+/** What a friend sees on their own dues page: no token, no other friends. */
+function friendView(f) {
+  const { token, ...rest } = f;
+  return rest;
+}
+
+/** Constant-time token comparison, so a wrong link can't be guessed by timing. */
+function findFriendByToken(db, token) {
+  if (typeof token !== 'string' || token.length < 16) return null;
+  const given = Buffer.from(token);
+  return db.friends.find((f) => {
+    const known = Buffer.from(f.token || '');
+    return known.length === given.length && crypto.timingSafeEqual(known, given);
+  }) || null;
 }
 
 /* ================= static file serving ================= */
@@ -83,7 +88,9 @@ function serveStatic(req, res, urlPath) {
   let filePath = decodeURIComponent(urlPath.split('?')[0]);
   if (filePath === '/') filePath = '/admin/index.html';
   if (filePath === '/admin' || filePath === '/admin/') filePath = '/admin/index.html';
-  if (filePath === '/portal' || filePath === '/portal/') filePath = '/portal/login.html';
+  // A friend's private link. The page reads the token back out of the URL.
+  if (/^\/f\/[a-f0-9]+\/?$/.test(filePath)) filePath = '/portal/dues.html';
+  if (filePath === '/portal' || filePath === '/portal/') filePath = '/portal/help.html';
 
   const resolved = path.normalize(path.join(PUBLIC_DIR, filePath));
   // startsWith(PUBLIC_DIR) alone would also accept a sibling like "/public-evil"
@@ -138,7 +145,7 @@ async function handleApi(req, res, pathname) {
     const db = readDB();
 
     if (pathname === '/api/admin/friends' && method === 'GET') {
-      return sendJSON(res, 200, { friends: db.friends.map(publicFriend) });
+      return sendJSON(res, 200, { friends: db.friends.map(adminFriend) });
     }
 
     if (pathname === '/api/admin/friends' && method === 'POST') {
@@ -150,11 +157,11 @@ async function handleApi(req, res, pathname) {
       const friend = {
         id: uid(), name: name.trim(), note: (note || '').trim(),
         email: email ? email.trim().toLowerCase() : '',
-        passwordHash: null, subscriptions: []
+        token: newToken(), subscriptions: []
       };
       db.friends.push(friend);
-      writeDB(db);
-      return sendJSON(res, 201, { friend: publicFriend(friend) });
+      await writeDB(db);
+      return sendJSON(res, 201, { friend: adminFriend(friend) });
     }
 
     const friendMatch = pathname.match(/^\/api\/admin\/friends\/([a-f0-9]+)$/);
@@ -163,7 +170,7 @@ async function handleApi(req, res, pathname) {
       if (!friend) return sendJSON(res, 404, { ok: false, error: 'Friend not found.' });
       if (method === 'DELETE') {
         db.friends = db.friends.filter(f => f.id !== friend.id);
-        writeDB(db);
+        await writeDB(db);
         return sendJSON(res, 200, { ok: true });
       }
       const { name, note, email } = await readBody(req);
@@ -174,13 +181,9 @@ async function handleApi(req, res, pathname) {
       }
       if (name !== undefined) friend.name = String(name || '').trim() || friend.name;
       if (note !== undefined) friend.note = String(note || '').trim();
-      if (emailStr !== undefined) {
-        const newEmail = emailStr.toLowerCase();
-        if (newEmail !== friend.email) friend.passwordHash = null; // email changed -> re-registration required
-        friend.email = newEmail;
-      }
-      writeDB(db);
-      return sendJSON(res, 200, { friend: publicFriend(friend) });
+      if (emailStr !== undefined) friend.email = emailStr.toLowerCase();
+      await writeDB(db);
+      return sendJSON(res, 200, { friend: adminFriend(friend) });
     }
 
     const subCreateMatch = pathname.match(/^\/api\/admin\/friends\/([a-f0-9]+)\/subscriptions$/);
@@ -196,8 +199,8 @@ async function handleApi(req, res, pathname) {
         payments: {}
       };
       friend.subscriptions.push(sub);
-      writeDB(db);
-      return sendJSON(res, 201, { friend: publicFriend(friend) });
+      await writeDB(db);
+      return sendJSON(res, 201, { friend: adminFriend(friend) });
     }
 
     const subMatch = pathname.match(/^\/api\/admin\/friends\/([a-f0-9]+)\/subscriptions\/([a-f0-9]+)$/);
@@ -208,7 +211,7 @@ async function handleApi(req, res, pathname) {
       if (!sub) return sendJSON(res, 404, { ok: false, error: 'Subscription not found.' });
       if (method === 'DELETE') {
         friend.subscriptions = friend.subscriptions.filter(s => s.id !== sub.id);
-        writeDB(db);
+        await writeDB(db);
         return sendJSON(res, 200, { ok: true });
       }
       const { service, customLabel, price, dueDay } = await readBody(req);
@@ -216,8 +219,8 @@ async function handleApi(req, res, pathname) {
       if (customLabel !== undefined) sub.customLabel = sub.service === 'Custom' ? customLabel.trim() : '';
       if (price !== undefined) sub.price = parseFloat(price) || 0;
       if (dueDay !== undefined) sub.dueDay = dueDay ? parseInt(dueDay, 10) : null;
-      writeDB(db);
-      return sendJSON(res, 200, { friend: publicFriend(friend) });
+      await writeDB(db);
+      return sendJSON(res, 200, { friend: adminFriend(friend) });
     }
 
     const toggleMatch = pathname.match(/^\/api\/admin\/friends\/([a-f0-9]+)\/subscriptions\/([a-f0-9]+)\/toggle$/);
@@ -230,18 +233,28 @@ async function handleApi(req, res, pathname) {
       sub.payments = sub.payments || {};
       const wasPaid = !!(sub.payments[mk] && sub.payments[mk].paid);
       sub.payments[mk] = { paid: !wasPaid, at: new Date().toISOString() };
-      writeDB(db);
-      return sendJSON(res, 200, { friend: publicFriend(friend) });
+      await writeDB(db);
+      return sendJSON(res, 200, { friend: adminFriend(friend) });
+    }
+
+    const relinkMatch = pathname.match(/^\/api\/admin\/friends\/([a-f0-9]+)\/relink$/);
+    if (relinkMatch && method === 'POST') {
+      const friend = db.friends.find(f => f.id === relinkMatch[1]);
+      if (!friend) return sendJSON(res, 404, { ok: false, error: 'Friend not found.' });
+      friend.token = newToken(); // the old link stops working immediately
+      await writeDB(db);
+      return sendJSON(res, 200, { friend: adminFriend(friend) });
     }
 
     if (pathname === '/api/admin/export' && method === 'GET') {
-      return sendJSON(res, 200, { friends: db.friends.map(publicFriend), exportedAt: new Date().toISOString() });
+      return sendJSON(res, 200, { friends: db.friends.map(adminFriend), exportedAt: new Date().toISOString() });
     }
 
     if (pathname === '/api/admin/import' && method === 'POST') {
       const { friends } = await readBody(req);
       if (!Array.isArray(friends)) return sendJSON(res, 400, { ok: false, error: 'Invalid backup file.' });
-      // preserve any existing password hashes for friends whose id+email still match
+      // Keep whichever link already works: the one in the backup, else the
+      // one this friend currently has, else a fresh one.
       const byId = new Map(db.friends.map(f => [f.id, f]));
       db.friends = friends.map(f => ({
         id: f.id || uid(),
@@ -249,53 +262,22 @@ async function handleApi(req, res, pathname) {
         note: f.note || '',
         email: (f.email || '').toLowerCase(),
         subscriptions: Array.isArray(f.subscriptions) ? f.subscriptions : [],
-        passwordHash: byId.has(f.id) ? byId.get(f.id).passwordHash : null
+        token: f.token || (byId.get(f.id) || {}).token || newToken()
       }));
-      writeDB(db);
+      await writeDB(db);
       return sendJSON(res, 200, { ok: true });
     }
 
     return sendJSON(res, 404, { ok: false, error: 'Unknown admin route.' });
   }
 
-  /* ---- friend registration & login ---- */
-  if (pathname === '/api/portal/register' && method === 'POST') {
-    const { email, password } = await readBody(req);
-    if (!email || !password || password.length < 6) {
-      return sendJSON(res, 400, { ok: false, error: 'Enter your email and a password of at least 6 characters.' });
-    }
+  /* ---- friend dues, opened by private link ---- */
+  const duesMatch = pathname.match(/^\/api\/portal\/dues\/([a-f0-9]+)$/);
+  if (duesMatch && method === 'GET') {
     const db = readDB();
-    const friend = db.friends.find(f => f.email && f.email.toLowerCase() === email.trim().toLowerCase());
-    if (!friend) return sendJSON(res, 404, { ok: false, error: "That email hasn't been added by the admin yet." });
-    if (friend.passwordHash) return sendJSON(res, 400, { ok: false, error: 'This account is already registered — log in instead.' });
-    friend.passwordHash = hashPassword(password);
-    writeDB(db);
-    const cookie = makeSessionCookie(FRIEND_COOKIE, { role: 'friend', id: friend.id });
-    return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': cookie });
-  }
-
-  if (pathname === '/api/portal/login' && method === 'POST') {
-    const { email, password } = await readBody(req);
-    const db = readDB();
-    const friend = db.friends.find(f => f.email && f.email.toLowerCase() === (email || '').trim().toLowerCase());
-    if (!friend || !friend.passwordHash || !verifyPassword(password || '', friend.passwordHash)) {
-      return sendJSON(res, 401, { ok: false, error: 'Incorrect email or password.' });
-    }
-    const cookie = makeSessionCookie(FRIEND_COOKIE, { role: 'friend', id: friend.id });
-    return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': cookie });
-  }
-
-  if (pathname === '/api/portal/logout' && method === 'POST') {
-    return sendJSON(res, 200, { ok: true }, { 'Set-Cookie': clearSessionCookie(FRIEND_COOKIE) });
-  }
-
-  if (pathname === '/api/portal/dues' && method === 'GET') {
-    const session = getFriendSession(req);
-    if (!session) return sendJSON(res, 401, { ok: false, error: 'Not signed in.' });
-    const db = readDB();
-    const friend = db.friends.find(f => f.id === session.id);
-    if (!friend) return sendJSON(res, 404, { ok: false, error: 'Account not found.' });
-    return sendJSON(res, 200, { friend: publicFriend(friend) });
+    const friend = findFriendByToken(db, duesMatch[1]);
+    if (!friend) return sendJSON(res, 404, { ok: false, error: 'This link is not valid. Ask for a new one.' });
+    return sendJSON(res, 200, { friend: friendView(friend) });
   }
 
   return sendJSON(res, 404, { ok: false, error: 'Unknown route.' });
@@ -316,21 +298,41 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`\nThe Ledger is running at http://localhost:${PORT}`);
-  console.log(`  Admin dashboard:  http://localhost:${PORT}/admin/`);
-  console.log(`  Friend portal:    http://localhost:${PORT}/portal/`);
-  console.log(`  Data file:        ${DB_PATH}`);
+async function start() {
+  // The ledger must be loaded before the first request, because the session
+  // signing key is stored in it.
+  const bootDB = await initStore();
+  setSessionSecret(process.env.SESSION_SECRET || bootDB.sessionSecret);
 
-  const generated = takeGeneratedAdminPassword();
-  if (generated) {
-    console.log(`\n  ${'='.repeat(52)}`);
-    console.log('  FIRST RUN — your admin account has been created:');
-    console.log(`    email:    ${bootDB.admin.email}`);
-    console.log(`    password: ${generated}`);
-    console.log('  This is shown once. Save it now.');
-    console.log('  (Set ADMIN_EMAIL / ADMIN_PASSWORD before the first run,');
-    console.log('   or run `npm run set-password` to change it later.)');
-    console.log(`  ${'='.repeat(52)}\n`);
-  }
+  server.listen(PORT, () => {
+    console.log(`\nThe Ledger is running on port ${PORT}`);
+    console.log(`  Admin dashboard:  http://localhost:${PORT}/admin/`);
+    console.log(`  Storage:          ${STORE_DESCRIPTION}`);
+
+    const generated = takeGeneratedAdminPassword();
+    if (generated) {
+      console.log(`\n  ${'='.repeat(52)}`);
+      console.log('  FIRST RUN — your admin account has been created:');
+      console.log(`    email:    ${bootDB.admin.email}`);
+      console.log(`    password: ${generated}`);
+      console.log('  This is shown once. Save it now.');
+      console.log('  (Set ADMIN_EMAIL / ADMIN_PASSWORD before the first run,');
+      console.log('   or run `npm run set-password` to change it later.)');
+      console.log(`  ${'='.repeat(52)}\n`);
+    }
+  });
+}
+
+/* Render stops a free instance with SIGTERM when it goes to sleep, so any
+   queued write has to reach the database before the process exits. */
+for (const signal of ['SIGTERM', 'SIGINT']) {
+  process.on(signal, () => {
+    server.close();
+    closeStore().finally(() => process.exit(0));
+  });
+}
+
+start().catch((err) => {
+  console.error('Could not start The Ledger:', err.message);
+  process.exit(1);
 });

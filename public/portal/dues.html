@@ -3,8 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>The Ledger — Your dues</title>
+<title>Your dues — The Ledger</title>
 <meta name="theme-color" content="#12151C">
+<meta name="robots" content="noindex, nofollow">
 <link rel="manifest" href="/portal/manifest.json">
 <link rel="icon" href="/icons/icon-192.png">
 <link rel="apple-touch-icon" href="/icons/icon-192.png">
@@ -13,14 +14,26 @@
 <link rel="stylesheet" href="/shared/styles.css">
 </head>
 <body>
-<div class="screen" id="duesScreen">
+
+<div class="screen" id="screenLoading">
+  <div class="login-wrap"><div class="spinner"></div></div>
+</div>
+
+<div class="screen hidden" id="screenError">
+  <div class="login-wrap">
+    <div class="login-card">
+      <div class="login-seal">S</div>
+      <h1>Link not valid</h1>
+      <p class="sub" id="errorText">This link has expired or was mistyped. Ask for a fresh one.</p>
+    </div>
+  </div>
+</div>
+
+<div class="screen hidden" id="screenDues">
   <header class="app-header">
     <div class="brand">
       <div class="seal">S</div>
       <h1 id="duesName">The Ledger</h1>
-    </div>
-    <div class="header-actions">
-      <button class="icon-btn" id="btnLogout" title="Log out">⎋</button>
     </div>
   </header>
   <main>
@@ -30,7 +43,9 @@
     <p class="portal-footnote">Marked paid by hand once the money lands. If something looks wrong, just ask.</p>
   </main>
 </div>
+
 <div id="toastRoot"></div>
+<script src="/shared/util.js"></script>
 <script src="/portal/portal.js"></script>
 </body>
 </html>

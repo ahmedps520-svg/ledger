@@ -1,0 +1,22 @@
+# Render blueprint. Create the service from this file and it wires
+# itself up; DATABASE_URL and ADMIN_PASSWORD are entered by hand so
+# they never live in the repository.
+services:
+  - type: web
+    name: the-ledger
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /portal/help.html
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_EMAIL
+        sync: false
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: COOKIE_SECURE
+        value: "1"
+      - key: NODE_VERSION
+        value: "22"
