@@ -4,10 +4,15 @@
   "description": "Subscription ledger for friends — admin dashboard + friend self-serve portal, synced across devices.",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "icons": "node scripts/generate-icons.js",
+    "set-password": "node scripts/set-admin-password.js",
+    "test": "node test/smoke.js"
   },
   "engines": {
     "node": ">=18"
   },
+  "license": "MIT",
+  "private": true,
   "dependencies": {}
 }

@@ -1,27 +1,36 @@
 /* =========================================================
-   The Ledger — subscription tracker for friends you cover
-   All data lives in this browser's localStorage. No server,
-   no accounts other than the one admin login below.
+   The Ledger — admin dashboard.
+   All data lives on the server; this file only renders it and
+   posts changes back. Nothing is cached in localStorage, so the
+   same book shows up on every device you sign in from.
    ========================================================= */
-
-const ADMIN_EMAIL = 'ahmedps520@gmail.com';
-// SHA-256 of "ahmedps520@gmail.com:spotify123@" — the raw password
-// is never stored in this file, only its hash is compared.
-const ADMIN_HASH = 'e07d5472a54b802a5f2aea2b39a63c170c269cd77dab6a135a27fb605201d1ef';
-
-const SESSION_KEY = 'ledger_session';
-const DATA_KEY = 'ledger_friends_v1';
 
 const SERVICES = ['Spotify', 'Snapchat', 'Custom'];
 
-/* ---------------- utils ---------------- */
-function uid() { return Math.random().toString(36).slice(2, 10) + Date.now().toString(36); }
+let state = {
+  friends: [],
+  search: '',
+  filter: 'all'
+};
 
-async function sha256(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+/* ---------------- api helper ---------------- */
+async function api(path, options = {}) {
+  const res = await fetch(path, {
+    credentials: 'same-origin',
+    headers: options.body ? { 'Content-Type': 'application/json' } : {},
+    ...options
+  });
+  let data = {};
+  try { data = await res.json(); } catch { /* empty body */ }
+  if (res.status === 401) {
+    showScreen('login');
+    throw new Error(data.error || 'Not signed in.');
+  }
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status}).`);
+  return data;
 }
 
+/* ---------------- utils ---------------- */
 function currentMonthKey(d = new Date()) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
@@ -35,6 +44,10 @@ function fmtMoney(n) {
 }
 function todayDay() { return new Date().getDate(); }
 
+function escapeHtml(str) {
+  return String(str ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function toast(msg) {
   const root = document.getElementById('toastRoot');
   const el = document.createElement('div');
@@ -44,23 +57,6 @@ function toast(msg) {
   root.appendChild(el);
   setTimeout(() => el.remove(), 2600);
 }
-
-/* ---------------- data layer ---------------- */
-function loadFriends() {
-  try {
-    const raw = localStorage.getItem(DATA_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch (e) { return []; }
-}
-function saveFriends(friends) {
-  localStorage.setItem(DATA_KEY, JSON.stringify(friends));
-}
-
-let state = {
-  friends: loadFriends(),
-  search: '',
-  filter: 'all'
-};
 
 function findFriend(id) { return state.friends.find(f => f.id === id); }
 function findSub(friendId, subId) {
@@ -78,43 +74,55 @@ function isOverdue(sub) {
   return todayDay() > Number(sub.dueDay);
 }
 
-/* ---------------- auth ---------------- */
-async function tryLogin(email, password) {
-  const h = await sha256(`${email.trim().toLowerCase()}:${password}`);
-  return h === ADMIN_HASH;
-}
-function isLoggedIn() { return sessionStorage.getItem(SESSION_KEY) === '1'; }
-function setLoggedIn(v) {
-  if (v) sessionStorage.setItem(SESSION_KEY, '1');
-  else sessionStorage.removeItem(SESSION_KEY);
+/** Replace one friend in state with the server's copy after a write. */
+function mergeFriend(friend) {
+  const i = state.friends.findIndex(f => f.id === friend.id);
+  if (i >= 0) state.friends[i] = friend;
+  else state.friends.push(friend);
 }
 
-function showScreen(loggedIn) {
-  document.getElementById('screenLogin').classList.toggle('hidden', loggedIn);
-  document.getElementById('screenApp').classList.toggle('hidden', !loggedIn);
-  if (loggedIn) renderAll();
+/* ---------------- screens & auth ---------------- */
+function showScreen(which) {
+  for (const [id, name] of [['screenLoading', 'loading'], ['screenLogin', 'login'], ['screenApp', 'app']]) {
+    document.getElementById(id).classList.toggle('hidden', which !== name);
+  }
 }
 
 document.getElementById('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const email = document.getElementById('loginEmail').value;
-  const password = document.getElementById('loginPassword').value;
+  const btn = document.getElementById('loginSubmit');
   const errEl = document.getElementById('loginError');
   errEl.textContent = '';
-  const ok = await tryLogin(email, password);
-  if (ok) {
-    setLoggedIn(true);
+  btn.disabled = true;
+  try {
+    await api('/api/admin/login', {
+      method: 'POST',
+      body: JSON.stringify({
+        email: document.getElementById('loginEmail').value,
+        password: document.getElementById('loginPassword').value
+      })
+    });
     document.getElementById('loginForm').reset();
-    showScreen(true);
-  } else {
-    errEl.textContent = 'Incorrect email or password.';
+    await enterApp();
+  } catch (err) {
+    errEl.textContent = err.message;
+  } finally {
+    btn.disabled = false;
   }
 });
 
-document.getElementById('btnLogout').addEventListener('click', () => {
-  setLoggedIn(false);
-  showScreen(false);
+document.getElementById('btnLogout').addEventListener('click', async () => {
+  try { await api('/api/admin/logout', { method: 'POST' }); } catch { /* log out locally anyway */ }
+  state.friends = [];
+  showScreen('login');
 });
+
+async function enterApp() {
+  const { friends } = await api('/api/admin/friends');
+  state.friends = friends;
+  showScreen('app');
+  renderAll();
+}
 
 /* ---------------- rendering ---------------- */
 function renderAll() {
@@ -124,16 +132,14 @@ function renderAll() {
 
 function renderSummary() {
   const mk = currentMonthKey();
-  let expected = 0, collected = 0, unpaidCount = 0, overdueCount = 0, totalSubs = 0;
+  let expected = 0, collected = 0, overdueCount = 0;
   state.friends.forEach(f => f.subscriptions.forEach(s => {
-    totalSubs++;
     expected += Number(s.price) || 0;
     if (isPaidThisMonth(s)) collected += Number(s.price) || 0;
-    else { unpaidCount++; if (isOverdue(s)) overdueCount++; }
+    else if (isOverdue(s)) overdueCount++;
   }));
   const outstanding = expected - collected;
-  const grid = document.getElementById('summaryGrid');
-  grid.innerHTML = `
+  document.getElementById('summaryGrid').innerHTML = `
     <div class="summary-card gold">
       <div class="label">${monthLabel(mk)}</div>
       <div class="value mono">${fmtMoney(expected)}</div>
@@ -171,7 +177,7 @@ function renderFriendList() {
   const list = document.getElementById('friendList');
   const q = state.search.trim().toLowerCase();
   const friends = state.friends
-    .filter(f => !q || f.name.toLowerCase().includes(q))
+    .filter(f => !q || f.name.toLowerCase().includes(q) || (f.email || '').toLowerCase().includes(q))
     .filter(f => f.subscriptions.some(subMatchesFilter) || f.subscriptions.length === 0);
 
   if (state.friends.length === 0) {
@@ -190,13 +196,19 @@ function renderFriendList() {
     const visibleSubs = f.subscriptions.filter(subMatchesFilter);
     const subsHtml = visibleSubs.length
       ? visibleSubs.map(s => renderSubRow(f, s)).join('')
-      : `<div class="sub-row"><span class="mono" style="color:var(--muted); font-size:13px;">No subscriptions match the current filter.</span></div>`;
+      : `<div class="sub-row"><span class="mono dim-note">No subscriptions match the current filter.</span></div>`;
+    const owed = f.subscriptions.reduce((t, s) => t + (isPaidThisMonth(s) ? 0 : Number(s.price) || 0), 0);
+    const meta = [
+      `${f.subscriptions.length} subscription${f.subscriptions.length === 1 ? '' : 's'}`,
+      owed > 0 ? `${fmtMoney(owed)} due` : 'all settled',
+      f.note ? escapeHtml(f.note) : null
+    ].filter(Boolean).join(' · ');
     return `
       <div class="friend-card" data-friend="${f.id}">
         <div class="friend-top">
-          <div>
-            <div class="friend-name">${escapeHtml(f.name)}</div>
-            <div class="friend-meta">${f.subscriptions.length} subscription${f.subscriptions.length === 1 ? '' : 's'}${f.note ? ' · ' + escapeHtml(f.note) : ''}</div>
+          <div class="friend-ident">
+            <div class="friend-name">${escapeHtml(f.name)}${accessBadge(f)}</div>
+            <div class="friend-meta">${meta}</div>
           </div>
           <div class="friend-top-actions">
             <button class="btn btn-ghost btn-sm" data-action="add-sub" data-friend="${f.id}">+ Sub</button>
@@ -207,6 +219,13 @@ function renderFriendList() {
       </div>
     `;
   }).join('');
+}
+
+/** Shows whether this friend can sign in to the portal to check their own dues. */
+function accessBadge(f) {
+  if (!f.email) return '';
+  if (f.registered) return `<span class="access-badge is-registered" title="${escapeHtml(f.email)} — signed up for the portal">portal</span>`;
+  return `<span class="access-badge" title="${escapeHtml(f.email)} — invited, hasn't set a password yet">invited</span>`;
 }
 
 function renderSubRow(friend, sub) {
@@ -220,7 +239,7 @@ function renderSubRow(friend, sub) {
       <div class="sub-left">
         <span class="service-chip ${chipClass(sub.service)}">${escapeHtml(label)}</span>
         <div>
-          <div class="sub-price mono">${fmtMoney(sub.price)}<span style="color:var(--muted); font-weight:400; font-size:12px;">/mo</span></div>
+          <div class="sub-price mono">${fmtMoney(sub.price)}<span class="per-mo">/mo</span></div>
           ${sub.dueDay ? `<div class="sub-due">Due day ${sub.dueDay}</div>` : ''}
         </div>
       </div>
@@ -234,35 +253,33 @@ function renderSubRow(friend, sub) {
   `;
 }
 
-function escapeHtml(str) {
-  return String(str).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-}
-
 /* ---------------- event delegation on friend list ---------------- */
 document.getElementById('friendList').addEventListener('click', (e) => {
   const btn = e.target.closest('[data-action]');
   if (!btn) return;
-  const action = btn.dataset.action;
-  const friendId = btn.dataset.friend;
-  const subId = btn.dataset.sub;
+  const { action, friend: friendId, sub: subId } = btn.dataset;
 
   if (action === 'add-sub') openAddSubModal(friendId);
   if (action === 'edit-friend') openEditFriendModal(friendId);
-  if (action === 'toggle-paid') togglePaid(friendId, subId);
+  if (action === 'toggle-paid') togglePaid(friendId, subId, btn);
   if (action === 'share-sub') openShareModal(friendId, subId);
   if (action === 'edit-sub') openEditSubModal(friendId, subId);
 });
 
-function togglePaid(friendId, subId) {
+async function togglePaid(friendId, subId, btn) {
   const sub = findSub(friendId, subId);
   if (!sub) return;
-  const mk = currentMonthKey();
-  sub.payments = sub.payments || {};
-  const wasPaid = !!(sub.payments[mk] && sub.payments[mk].paid);
-  sub.payments[mk] = { paid: !wasPaid, at: new Date().toISOString() };
-  saveFriends(state.friends);
-  renderAll();
-  toast(wasPaid ? 'Marked unpaid for this month' : 'Marked paid for this month');
+  const wasPaid = isPaidThisMonth(sub);
+  if (btn) btn.disabled = true;
+  try {
+    const { friend } = await api(`/api/admin/friends/${friendId}/subscriptions/${subId}/toggle`, { method: 'POST' });
+    mergeFriend(friend);
+    renderAll();
+    toast(wasPaid ? 'Marked unpaid for this month' : 'Marked paid for this month');
+  } catch (err) {
+    toast(err.message);
+    if (btn) btn.disabled = false;
+  }
 }
 
 /* ---------------- search / filter ---------------- */
@@ -278,13 +295,25 @@ document.getElementById('filterSelect').addEventListener('change', (e) => {
 /* ---------------- modal system ---------------- */
 function openModal(html) {
   const root = document.getElementById('modalRoot');
-  root.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal">${html}</div></div>`;
+  root.innerHTML = `<div class="modal-backdrop" id="modalBackdrop"><div class="modal" role="dialog" aria-modal="true">${html}</div></div>`;
   document.getElementById('modalBackdrop').addEventListener('click', (e) => {
     if (e.target.id === 'modalBackdrop') closeModal();
   });
+  const firstInput = root.querySelector('input, button');
+  if (firstInput) firstInput.focus();
 }
 function closeModal() {
   document.getElementById('modalRoot').innerHTML = '';
+}
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeModal();
+});
+
+/** Shows an error inside the open modal instead of blowing the form away. */
+function modalError(msg) {
+  const el = document.querySelector('.modal .error-msg');
+  if (el) el.textContent = msg;
+  else toast(msg);
 }
 
 /* ---- Add friend ---- */
@@ -299,9 +328,14 @@ function openAddFriendModal() {
         <input type="text" id="newFriendName" placeholder="e.g. Sarah" required>
       </div>
       <div class="field">
+        <label for="newFriendEmail">Email (optional)</label>
+        <input type="email" id="newFriendEmail" placeholder="so they can check their own dues">
+      </div>
+      <div class="field">
         <label for="newFriendNote">Note (optional)</label>
         <input type="text" id="newFriendNote" placeholder="e.g. college roommate">
       </div>
+      <div class="error-msg"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-ghost" id="cancelAddFriend">Cancel</button>
         <button type="submit" class="btn btn-primary">Add friend</button>
@@ -309,16 +343,26 @@ function openAddFriendModal() {
     </form>
   `);
   document.getElementById('cancelAddFriend').addEventListener('click', closeModal);
-  document.getElementById('formAddFriend').addEventListener('submit', (e) => {
+  document.getElementById('formAddFriend').addEventListener('submit', async (e) => {
     e.preventDefault();
     const name = document.getElementById('newFriendName').value.trim();
-    const note = document.getElementById('newFriendNote').value.trim();
     if (!name) return;
-    state.friends.push({ id: uid(), name, note, subscriptions: [] });
-    saveFriends(state.friends);
-    closeModal();
-    renderAll();
-    toast(`${name} added to the ledger`);
+    try {
+      const { friend } = await api('/api/admin/friends', {
+        method: 'POST',
+        body: JSON.stringify({
+          name,
+          email: document.getElementById('newFriendEmail').value.trim(),
+          note: document.getElementById('newFriendNote').value.trim()
+        })
+      });
+      mergeFriend(friend);
+      closeModal();
+      renderAll();
+      toast(`${name} added to the ledger`);
+    } catch (err) {
+      modalError(err.message);
+    }
   });
 }
 
@@ -334,30 +378,70 @@ function openEditFriendModal(friendId) {
         <input type="text" id="editFriendName" value="${escapeHtml(f.name)}" required>
       </div>
       <div class="field">
+        <label for="editFriendEmail">Email</label>
+        <input type="email" id="editFriendEmail" value="${escapeHtml(f.email || '')}" placeholder="lets them sign in to the portal">
+        <p class="field-hint">${f.email
+          ? (f.registered
+              ? 'Signed up for the portal. Changing this email resets their password.'
+              : 'Invited — send them the portal link so they can set a password.')
+          : 'Add an email to let them check their own dues at /portal/.'}</p>
+      </div>
+      <div class="field">
         <label for="editFriendNote">Note</label>
         <input type="text" id="editFriendNote" value="${escapeHtml(f.note || '')}">
       </div>
+      <div class="error-msg"></div>
       <div class="modal-actions">
         <button type="button" class="btn btn-danger" id="deleteFriendBtn">Remove friend</button>
         <button type="submit" class="btn btn-primary">Save</button>
       </div>
     </form>
+    ${f.email ? '<button type="button" class="btn btn-ghost btn-wide" id="copyInviteBtn">Copy portal invite</button>' : ''}
   `);
-  document.getElementById('formEditFriend').addEventListener('submit', (e) => {
+
+  document.getElementById('formEditFriend').addEventListener('submit', async (e) => {
     e.preventDefault();
-    f.name = document.getElementById('editFriendName').value.trim() || f.name;
-    f.note = document.getElementById('editFriendNote').value.trim();
-    saveFriends(state.friends);
-    closeModal();
-    renderAll();
+    try {
+      const { friend } = await api(`/api/admin/friends/${friendId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: document.getElementById('editFriendName').value.trim(),
+          email: document.getElementById('editFriendEmail').value.trim(),
+          note: document.getElementById('editFriendNote').value.trim()
+        })
+      });
+      mergeFriend(friend);
+      closeModal();
+      renderAll();
+      toast('Friend updated');
+    } catch (err) {
+      modalError(err.message);
+    }
   });
-  document.getElementById('deleteFriendBtn').addEventListener('click', () => {
+
+  document.getElementById('deleteFriendBtn').addEventListener('click', async () => {
     if (!confirm(`Remove ${f.name} and all their subscriptions? This can't be undone.`)) return;
-    state.friends = state.friends.filter(x => x.id !== friendId);
-    saveFriends(state.friends);
-    closeModal();
-    renderAll();
-    toast('Friend removed');
+    try {
+      await api(`/api/admin/friends/${friendId}`, { method: 'DELETE' });
+      state.friends = state.friends.filter(x => x.id !== friendId);
+      closeModal();
+      renderAll();
+      toast('Friend removed');
+    } catch (err) {
+      modalError(err.message);
+    }
+  });
+
+  const inviteBtn = document.getElementById('copyInviteBtn');
+  if (inviteBtn) inviteBtn.addEventListener('click', async () => {
+    const url = `${location.origin}/portal/register.html`;
+    const text = `Hey ${f.name}! You can check what you owe me any time here: ${url} — sign up with ${f.email}.`;
+    try {
+      await navigator.clipboard.writeText(text);
+      toast('Invite copied to clipboard');
+    } catch {
+      toast(url);
+    }
   });
 }
 
@@ -371,9 +455,12 @@ function openAddSubModal(friendId) {
     customLabel: '',
     price: '',
     dueDay: '',
-    onSubmit: (data) => {
-      f.subscriptions.push({ id: uid(), payments: {}, ...data });
-      saveFriends(state.friends);
+    onSubmit: async (data) => {
+      const { friend } = await api(`/api/admin/friends/${friendId}/subscriptions`, {
+        method: 'POST',
+        body: JSON.stringify(data)
+      });
+      mergeFriend(friend);
       closeModal();
       renderAll();
       toast('Subscription added');
@@ -394,17 +481,21 @@ function openEditSubModal(friendId, subId) {
     dueDay: s.dueDay || '',
     showDelete: true,
     showHistory: s,
-    onSubmit: (data) => {
-      Object.assign(s, data);
-      saveFriends(state.friends);
+    onSubmit: async (data) => {
+      const { friend } = await api(`/api/admin/friends/${friendId}/subscriptions/${subId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+      });
+      mergeFriend(friend);
       closeModal();
       renderAll();
       toast('Subscription updated');
     },
-    onDelete: () => {
+    onDelete: async () => {
       if (!confirm('Remove this subscription?')) return;
-      f.subscriptions = f.subscriptions.filter(x => x.id !== subId);
-      saveFriends(state.friends);
+      await api(`/api/admin/friends/${friendId}/subscriptions/${subId}`, { method: 'DELETE' });
+      const friend = findFriend(friendId);
+      friend.subscriptions = friend.subscriptions.filter(x => x.id !== subId);
       closeModal();
       renderAll();
       toast('Subscription removed');
@@ -415,9 +506,9 @@ function openEditSubModal(friendId, subId) {
 function renderSubForm({ title, service, customLabel, price, dueDay, showDelete, showHistory, onSubmit, onDelete }) {
   const historyHtml = showHistory ? buildHistoryHtml(showHistory) : '';
   openModal(`
-    <h2>${title}</h2>
+    <h2>${escapeHtml(title)}</h2>
     <form id="formSub">
-      <label style="display:block; font-size:12.5px; color:var(--muted); margin-bottom:8px; text-transform:uppercase; letter-spacing:.02em;">Service</label>
+      <label class="group-label">Service</label>
       <div class="chip-select" id="serviceChips">
         ${SERVICES.map(s => `<div class="chip-option ${s === service ? 'active' : ''}" data-service="${s}">${s}</div>`).join('')}
       </div>
@@ -428,17 +519,18 @@ function renderSubForm({ title, service, customLabel, price, dueDay, showDelete,
       <div class="modal-row">
         <div class="field">
           <label for="subPrice">Price / month</label>
-          <input type="number" id="subPrice" step="0.01" min="0" placeholder="0.00" value="${price !== '' ? price : ''}" required>
+          <input type="number" id="subPrice" step="0.01" min="0" placeholder="0.00" value="${price !== '' && price !== null && price !== undefined ? price : ''}" required>
         </div>
         <div class="field">
           <label for="subDueDay">Due day (1–28)</label>
-          <input type="number" id="subDueDay" min="1" max="28" placeholder="e.g. 5" value="${dueDay}">
+          <input type="number" id="subDueDay" min="1" max="28" placeholder="e.g. 5" value="${dueDay || ''}">
         </div>
       </div>
       ${historyHtml}
+      <div class="error-msg"></div>
       <div class="modal-actions">
         ${showDelete ? '<button type="button" class="btn btn-danger" id="deleteSubBtn">Remove</button>' : '<button type="button" class="btn btn-ghost" id="cancelSubBtn">Cancel</button>'}
-        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="submit" class="btn btn-primary" id="saveSubBtn">Save</button>
       </div>
     </form>
   `);
@@ -454,18 +546,28 @@ function renderSubForm({ title, service, customLabel, price, dueDay, showDelete,
 
   const cancelBtn = document.getElementById('cancelSubBtn');
   if (cancelBtn) cancelBtn.addEventListener('click', closeModal);
-  const deleteBtn = document.getElementById('deleteSubBtn');
-  if (deleteBtn) deleteBtn.addEventListener('click', onDelete);
 
-  document.getElementById('formSub').addEventListener('submit', (e) => {
+  const deleteBtn = document.getElementById('deleteSubBtn');
+  if (deleteBtn) deleteBtn.addEventListener('click', async () => {
+    try { await onDelete(); } catch (err) { modalError(err.message); }
+  });
+
+  document.getElementById('formSub').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const data = {
-      service: selectedService,
-      customLabel: selectedService === 'Custom' ? document.getElementById('customLabelInput').value.trim() : '',
-      price: parseFloat(document.getElementById('subPrice').value) || 0,
-      dueDay: document.getElementById('subDueDay').value ? parseInt(document.getElementById('subDueDay').value, 10) : null
-    };
-    onSubmit(data);
+    const saveBtn = document.getElementById('saveSubBtn');
+    const dueRaw = document.getElementById('subDueDay').value;
+    saveBtn.disabled = true;
+    try {
+      await onSubmit({
+        service: selectedService,
+        customLabel: selectedService === 'Custom' ? document.getElementById('customLabelInput').value.trim() : '',
+        price: parseFloat(document.getElementById('subPrice').value) || 0,
+        dueDay: dueRaw ? parseInt(dueRaw, 10) : null
+      });
+    } catch (err) {
+      modalError(err.message);
+      saveBtn.disabled = false;
+    }
   });
 }
 
@@ -476,7 +578,7 @@ function buildHistoryHtml(sub) {
     const p = sub.payments[mk];
     return `<div class="hist-row ${p.paid ? 'was-paid' : ''}"><span>${monthLabel(mk)}</span><span>${p.paid ? 'Paid' : 'Unpaid'}</span></div>`;
   }).join('');
-  return `<div class="payment-history"><label style="display:block; font-size:12.5px; color:var(--muted); margin-bottom:2px; text-transform:uppercase;">Recent history</label>${rows}</div>`;
+  return `<div class="payment-history"><label class="group-label">Recent history</label>${rows}</div>`;
 }
 
 /* ---- Share reminder ---- */
@@ -515,13 +617,14 @@ function openShareModal(friendId, subId) {
     } else {
       try {
         await navigator.clipboard.writeText(text);
-        toast('Share isn\'t supported here — copied instead');
+        toast("Share isn't supported here — copied instead");
       } catch {
         toast('Copy the text above to share it');
       }
     }
   });
 }
+
 function ordinalSuffix(n) {
   n = Number(n);
   if (n % 10 === 1 && n % 100 !== 11) return 'st';
@@ -534,42 +637,53 @@ function ordinalSuffix(n) {
 document.getElementById('btnBackup').addEventListener('click', () => {
   openModal(`
     <h2>Backup &amp; restore</h2>
-    <p style="color:var(--muted); font-size:13.5px; margin-bottom:18px;">Everything is stored only in this browser. Export a copy so you don't lose it, or restore from a previous export.</p>
+    <p class="modal-note">Your ledger lives on the server. Export a copy to keep off-site, or restore one you saved earlier.</p>
+    <div class="error-msg"></div>
     <div class="modal-actions">
       <button type="button" class="btn btn-ghost" id="exportBtn">Export backup</button>
       <button type="button" class="btn btn-primary" id="importBtn">Import backup</button>
     </div>
-    <input type="file" id="importFile" accept="application/json" style="display:none;">
+    <input type="file" id="importFile" accept="application/json" hidden>
   `);
-  document.getElementById('exportBtn').addEventListener('click', () => {
-    const blob = new Blob([JSON.stringify(state.friends, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `ledger-backup-${currentMonthKey()}.json`;
-    a.click();
-    URL.revokeObjectURL(url);
-    toast('Backup downloaded');
+
+  document.getElementById('exportBtn').addEventListener('click', async () => {
+    try {
+      const data = await api('/api/admin/export');
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `ledger-backup-${currentMonthKey()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast('Backup downloaded');
+    } catch (err) {
+      modalError(err.message);
+    }
   });
+
   document.getElementById('importBtn').addEventListener('click', () => {
     document.getElementById('importFile').click();
   });
+
   document.getElementById('importFile').addEventListener('change', (e) => {
     const file = e.target.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       try {
-        const data = JSON.parse(reader.result);
-        if (!Array.isArray(data)) throw new Error('bad format');
+        const parsed = JSON.parse(reader.result);
+        // Accept both the server export ({friends:[...]}) and a bare array
+        // from the old localStorage-only version of this app.
+        const friends = Array.isArray(parsed) ? parsed : parsed.friends;
+        if (!Array.isArray(friends)) throw new Error('That file is not a Ledger backup.');
         if (!confirm('This will replace all current data with the imported backup. Continue?')) return;
-        state.friends = data;
-        saveFriends(state.friends);
+        await api('/api/admin/import', { method: 'POST', body: JSON.stringify({ friends }) });
+        await enterApp();
         closeModal();
-        renderAll();
         toast('Backup restored');
-      } catch {
-        toast('That file could not be read as a backup');
+      } catch (err) {
+        modalError(err.message || 'That file could not be read as a backup.');
       }
     };
     reader.readAsText(file);
@@ -577,10 +691,18 @@ document.getElementById('btnBackup').addEventListener('click', () => {
 });
 
 /* ---------------- boot ---------------- */
-showScreen(isLoggedIn());
+(async function boot() {
+  try {
+    const me = await api('/api/admin/me');
+    if (me.loggedIn) await enterApp();
+    else showScreen('login');
+  } catch {
+    showScreen('login');
+  }
+})();
 
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js').catch(() => {});
+    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   });
 }

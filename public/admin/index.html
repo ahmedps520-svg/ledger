@@ -3,34 +3,35 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>The Ledger — Subscription Tracker</title>
+<title>The Ledger — Admin</title>
 <meta name="theme-color" content="#12151C">
-<link rel="manifest" href="manifest.json">
-<link rel="icon" href="icons/icon-192.png">
-<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/icon-192.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="/shared/styles.css">
 </head>
 <body>
 
 <!-- ===================== LOGIN SCREEN ===================== -->
-<div id="screenLogin" class="screen">
+<div id="screenLogin" class="screen hidden">
   <div class="login-wrap">
-    <form class="login-card" id="loginForm" autocomplete="off">
+    <form class="login-card" id="loginForm" autocomplete="on">
       <div class="login-seal">S</div>
       <h1>The Ledger</h1>
       <p class="sub">Private access only. Sign in to view the book.</p>
       <div class="field">
         <label for="loginEmail">Email</label>
-        <input type="email" id="loginEmail" placeholder="you@example.com" required>
+        <input type="email" id="loginEmail" name="email" autocomplete="username" placeholder="you@example.com" required>
       </div>
       <div class="field">
         <label for="loginPassword">Password</label>
-        <input type="password" id="loginPassword" placeholder="••••••••" required>
+        <input type="password" id="loginPassword" name="password" autocomplete="current-password" placeholder="••••••••" required>
       </div>
-      <button type="submit" class="btn btn-primary">Sign in</button>
+      <button type="submit" class="btn btn-primary" id="loginSubmit">Sign in</button>
       <div class="error-msg" id="loginError"></div>
+      <p class="login-alt">Not the admin? <a href="/portal/">Go to the friend portal</a></p>
     </form>
   </div>
 </div>
@@ -69,9 +70,14 @@
   <button class="fab" id="fabAdd" title="Add friend">+</button>
 </div>
 
+<!-- ===================== LOADING ===================== -->
+<div id="screenLoading" class="screen">
+  <div class="login-wrap"><div class="spinner"></div></div>
+</div>
+
 <div id="modalRoot"></div>
 <div id="toastRoot"></div>
 
-<script src="app.js"></script>
+<script src="/admin/app.js"></script>
 </body>
 </html>
