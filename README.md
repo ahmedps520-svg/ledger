@@ -28,6 +28,12 @@ Two free accounts, about fifteen minutes, no card required.
 
 The free tier is permanent and far larger than this app will ever need.
 
+Paste the string exactly as Neon gives it to you. The app verifies Neon's
+TLS certificate, so the connection can't be read in transit. If a deploy
+ever fails with an SSL or authentication error, try removing
+`&channel_binding=require` from the end of the string — that setting is
+meant for a different Postgres client.
+
 ### 2. Create the website (Render)
 
 1. Sign up at [render.com](https://render.com) with your GitHub account.
@@ -103,6 +109,7 @@ To change it later: `npm run set-password -- you@example.com 'new-password'`
 | `ADMIN_EMAIL` | `admin@example.com` | Admin login, first run only |
 | `ADMIN_PASSWORD` | *generated* | Admin password, first run only |
 | `SESSION_SECRET` | *stored in the database* | Overrides the cookie signing key |
+| `DATABASE_SSL_NO_VERIFY` | off | Set to `1` only for a database with a self-signed certificate |
 | `COOKIE_SECURE` | off | Set to `1` when serving over HTTPS |
 
 ---
